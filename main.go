@@ -423,7 +423,8 @@ func indexDbStore(logger *zap.Logger) {
 	// 2022/10/28-6017364.parquet
 	// 2023/02/13-7622094.parquet
 	// 2023/03/28-8255283.parquet
-	start_block := int64(8255283)
+	// 2023/11/21-11826331.parquet
+	start_block := int64(11826331)
 	//end_block := start_block + 200000 //should be about a week
 	//end_block := start_block + 30000 //should be about a day
 	//end_block := start_block + 1000 //should be about an hour
