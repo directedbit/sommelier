@@ -252,6 +252,7 @@ func init() {
 	}
 
 	DefaultNodeHome = filepath.Join(userHomeDir, ".sommelier")
+
 }
 
 // NewSommelierApp returns a reference to an initialized Sommelier.
@@ -655,9 +656,24 @@ func (app *SommelierApp) BeginBlocker(ctx sdk.Context, req abci.RequestBeginBloc
 	return app.mm.BeginBlock(ctx, req)
 }
 
+var lastContext sdk.Context
+
+func (app *SommelierApp) Commit() abci.ResponseCommit {
+	res := app.BaseApp.Commit()
+	return res
+}
+
 // EndBlocker application updates every end block
 func (app *SommelierApp) EndBlocker(ctx sdk.Context, req abci.RequestEndBlock) abci.ResponseEndBlock {
-	return app.mm.EndBlock(ctx, req)
+	//get the osmosis price
+	//encode messages
+	// is block within the last 5 seconds
+	lastContext = ctx
+	res := app.mm.EndBlock(ctx, req)
+	//call the AI for trade
+
+	//save the encoded messages + price in the parquet db
+	return res
 }
 
 // InitChainer application update at chain initialization
