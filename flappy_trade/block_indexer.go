@@ -154,7 +154,8 @@ func GetPoolPrice(poolId int64, baseAsset string, denomAsset string) float64 {
 
 }
 
-func IndexMsg(logger log.Logger, pw *writer.ParquetWriter, encodingConfig *params.EncodingConfig, msg sdk.Msg, msgIndex int, height int64, blockTime int64, somm_to_osmo float64, osmo_to_eth float64) bool {
+func IndexMsg(logger log.Logger, pw *writer.ParquetWriter, encodingConfig *params.EncodingConfig, msg sdk.Msg, msgIndex int, height int64, blockTime int64, somm_to_osmo float64, osmo_to_eth float64) []Transaction {
+	var foundTransactions []Transaction
 	var newTrans = Transaction{}
 	switch m := msg.(type) {
 	case *bankTypes.MsgSend:
@@ -265,21 +266,19 @@ func IndexMsg(logger log.Logger, pw *writer.ParquetWriter, encodingConfig *param
 	case *stakeTypes.MsgBeginRedelegate:
 		print("ignoring MsgBeginRedelegate ", m.Amount.String(), " from ", m.DelegatorAddress, " to ", m.ValidatorDstAddress)
 	case *authz.MsgExec:
-		wroteValue := false
 		for i := range m.Msgs {
 			var innerMsg sdk.Msg
 			if err := encodingConfig.InterfaceRegistry.UnpackAny(m.Msgs[i], &innerMsg); err != nil {
 				logger.Error("failed to unpack msg", zap.Error(err))
 				panic(err)
 			}
-			IndexMsg(logger, pw, encodingConfig, innerMsg, i, height, blockTime, somm_to_osmo, osmo_to_eth)
+			newTransactions := IndexMsg(logger, pw, encodingConfig, innerMsg, i, height, blockTime, somm_to_osmo, osmo_to_eth)
+			foundTransactions = append(foundTransactions, newTransactions...)
 			if err := pw.Write(newTrans); err != nil {
 				logger.Error("Failed writing to parquet file:", err)
 				panic(err)
 			}
-			wroteValue = true
 		}
-		return wroteValue
 	case *gravitytypes.MsgSendToEthereum:
 		print("gravity.MsgSendToEthereum ", m.Amount.Amount.String(), " from ", m.Sender, " to ", m.EthereumRecipient)
 		newTrans = Transaction{BlockNumber: height,
@@ -355,22 +354,22 @@ func IndexMsg(logger log.Logger, pw *writer.ParquetWriter, encodingConfig *param
 		if err := pw.Write(newTrans); err != nil {
 			panic(err)
 		}
-		return true
+		foundTransactions = append(foundTransactions, newTrans)
 	}
-	return false
+	return foundTransactions
 }
 
 // need to use as raw data as possible, can always do transforms on
 // the data later.
 type Transaction struct {
-	BlockNumber     int64   `parquet:"name=block_number, type=INT64"`
-	Time            int64   `parquet:"name=time, type=INT64"`
-	MessageType     string  `parquet:"name=message_type, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Source          string  `parquet:"name=source, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Destination     string  `parquet:"name=destination, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Amount          int64   `parquet:"name=amount, type=INT64"`
-	OsmoToEthPrice  float32 `parquet:"name=osmo_eth_price, type=FLOAT"`
-	SommToOsmoPrice float32 `parquet:"name=somm_osmo_price, type=FLOAT"`
+	BlockNumber     int64   `json:"block_number" parquet:"name=block_number, type=INT64"`
+	Time            int64   `json:"time" parquet:"name=time, type=INT64"`
+	MessageType     string  `json:"message_type" parquet:"name=message_type, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Source          string  `json:"source" parquet:"name=source, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Destination     string  `json:"destination" parquet:"name=destination, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Amount          int64   `json:"amount" parquet:"name=amount, type=INT64"`
+	OsmoToEthPrice  float32 `json:"osmo_eth_price" parquet:"name=osmo_eth_price, type=FLOAT"`
+	SommToOsmoPrice float32 `json:"somm_osmo_price" parquet:"name=somm_osmo_price, type=FLOAT"`
 }
 
 func IndexBlockHeight(height int64, somm_to_osmo float64, osmo_to_eth float64, logger log.Logger) {
@@ -396,13 +395,13 @@ func IndexBlockHeight(height int64, somm_to_osmo float64, osmo_to_eth float64, l
 	*/
 }
 
-func IndexBlock(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64, logger log.Logger) {
+func IndexBlock(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64, logger log.Logger) []Transaction {
+	var foundTransactions []Transaction
 	pw, curPwFile, curPrefix = GetParquetWriter(ParquetFolder, block, logger, pw, curPwFile, curPrefix)
 	//blocktime is in UTC time
 	blockTime := block.Time.UTC().Unix()
 	blockTimeString := block.Time.UTC().Format("2006-01-02 15:04:05")
 	logger.Info("Indexig block ", " height ", block.Height, "time ", blockTimeString)
-	valid_blocks := 0
 	for index, tx := range block.Txs {
 		sdkTx, err := encodingConfig.TxConfig.TxDecoder()(tx)
 		if err != nil {
@@ -452,13 +451,12 @@ func IndexBlock(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64
 			fmt.Printf("block %d tx %d: %s\n", block.Height, index, tx)
 			for msgIndex, msg := range sdkTx.GetMsgs() {
 				print(msg)
-				if IndexMsg(logger, pw, &encodingConfig, msg, msgIndex, block.Height, blockTime, somm_to_osmo, osmo_to_eth) {
-					valid_blocks++
-				}
+				newTransactions := IndexMsg(logger, pw, &encodingConfig, msg, msgIndex, block.Height, blockTime, somm_to_osmo, osmo_to_eth)
+				foundTransactions = append(foundTransactions, newTransactions...)
 			}
 		}
 	}
-	if valid_blocks == 0 {
+	if len(foundTransactions) == 0 {
 		emptyTransaction := Transaction{BlockNumber: block.Height,
 			Time:            blockTime,
 			MessageType:     "empty_block",
@@ -472,7 +470,9 @@ func IndexBlock(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64
 			logger.Error(err.Error())
 			panic(err)
 		}
+		foundTransactions = append(foundTransactions, emptyTransaction)
 	}
+	return foundTransactions
 }
 
 func getFileWithPrefix(folderPath string, prefix string) string {
