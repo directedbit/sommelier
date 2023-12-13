@@ -67,4 +67,4 @@ artifacts
 
 # don't save the env file
 .env
-__debug_bin
+__debug_bin*
