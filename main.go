@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path"
 	"reflect"
 	"strings"
 	"time"
@@ -287,6 +288,7 @@ FOR_LOOP:
 				osmo_to_eth = flappy_trade.GetPoolPrice(flappy_trade.OSMO_ETH_POOL, "OSMO", "ETH")
 				MyR.Logger.Info("ETH_OSMO_PRICE")
 			}
+
 			foundTransactions := flappy_trade.IndexBlock(first, somm_to_osmo, osmo_to_eth, MyR.Logger)
 			//if len(foundTransactions) > 0 && MyR.pool.IsCaughtUp() {
 			if len(foundTransactions) > 0 {
@@ -299,8 +301,6 @@ FOR_LOOP:
 				}
 			}
 
-			// TODO: same thing for app - but we would need a way to
-			// get the hash without persisting the state
 			blocksSynced++
 
 			if blocksSynced%100 == 0 {
@@ -390,6 +390,15 @@ func (MyR *MyReactor) GetChannels() []*p2p.ChannelDescriptor {
 }
 
 func main() {
+	userDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	var homeFolder = path.Join(userDir, "workspace", "sommelier-data")
+	var dataFolder = path.Join(homeFolder, "data")
+	var configFolder = path.Join(homeFolder, "config")
+	var genesisFile = path.Join(configFolder, "genesis.json")
+	var nodeKeyFile = path.Join(configFolder, "node_key.json")
 	fmt.Println("Starting fast Reactor")
 	tmlogger := tmlog.NewTMLogger(os.Stdout)
 	tmlogger = tmlog.NewFilter(tmlogger, tmlog.AllowInfo()) //, log.AllowInfo(), log.AllowError())
@@ -398,7 +407,7 @@ func main() {
 	//indexDbStore(logger)
 	//readCorruptDatabase()
 	//logger.Info("done")
-	storeDB, err := dbm.NewGoLevelDB("blockstore", "/Users/richard/workspace/sommelier-data/data")
+	storeDB, err := dbm.NewGoLevelDB("blockstore", dataFolder)
 	if err != nil {
 		logger.Error("failed to open blockstore", zap.Error(err))
 		log.Fatal(err)
@@ -407,14 +416,14 @@ func main() {
 	logger.Info("Opened Blockstore", zap.Int64("height", myerStore.Height()), zap.Int64("base", myerStore.Base()))
 	//TODO - maybe discard the responses
 	nswStore := sm.NewStore(storeDB, sm.StoreOptions{DiscardABCIResponses: false})
-	stateStore, err := nswStore.LoadFromDBOrGenesisFile("/Users/richard/workspace/sommelier-data/config/genesis.json")
+	stateStore, err := nswStore.LoadFromDBOrGenesisFile(genesisFile)
 	if err != nil {
 		logger.Error("failed to load state store", zap.Error(err))
 		panic(err)
 	}
 	config := config.DefaultConfig()
 	mConnConfig := p2p.MConnConfig(config.P2P)
-	nodeKey, err := p2p.LoadOrGenNodeKey("/Users/richard/workspace/sommelier-data/config/node_key.json")
+	nodeKey, err := p2p.LoadOrGenNodeKey(nodeKeyFile)
 	if err != nil {
 		logger.Error("failed to load node key", zap.Error(err))
 		panic(err)

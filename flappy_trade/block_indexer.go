@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,8 +43,7 @@ import (
 	//"go.uber.org/zap"
 )
 
-const BlockStoreFolder = "/Users/richard/workspace/sommelier-data/data"
-const ParquetFolder = "/Users/richard/workspace/flappy_trade/parquet-training-data"
+var ParquetFolder string
 
 const SOMM_OSMO_POOL = 627
 const OSMO_ETH_POOL = 704
@@ -56,6 +56,11 @@ var curPrefix string
 var storedb *dbm.GoLevelDB
 
 func init() {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		panic(err)
+	}
+	ParquetFolder = path.Join(userHome, "workspace", "flappy_trade", "parquet-training-data")
 	encodingConfig = params.MakeCodec()
 }
 
