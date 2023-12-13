@@ -1,6 +1,7 @@
 package flappy_trade
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"testing"
@@ -13,6 +14,23 @@ func TestGetPoolPrice(t *testing.T) {
 	price := GetPoolPrice(SOMM_OSMO_POOL, "SOMM", "OSMO")
 	assert.Greater(t, 0.5, float64(price))
 	assert.Less(t, 0.2, float64(price))
+}
+
+func TestMarshalJson(t *testing.T) {
+	transaction := Transaction{
+		BlockNumber:     1,
+		Time:            2,
+		MessageType:     "3",
+		Source:          "4",
+		Destination:     "5",
+		Amount:          6,
+		OsmoToEthPrice:  -1.0,
+		SommToOsmoPrice: -1.0,
+	}
+	jsonData, err := json.Marshal(transaction)
+	assert.Nil(t, err)
+	assert.NotNil(t, jsonData)
+	assert.Equal(t, `{"block_number":1,"time":2,"message_type":"3","source":"4","destination":"5","amount":6,"osmo_eth_price":-1,"somm_osmo_price":-1}`, string(jsonData))
 }
 
 func TestParquetWriter(t *testing.T) {

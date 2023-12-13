@@ -288,8 +288,18 @@ FOR_LOOP:
 				osmo_to_eth = flappy_trade.GetPoolPrice(flappy_trade.OSMO_ETH_POOL, "OSMO", "ETH")
 				MyR.Logger.Info("ETH_OSMO_PRICE")
 			}
-			//TODO Check the response from the price predictor
-			flappy_trade.IndexBlock(first, somm_to_osmo, osmo_to_eth, MyR.Logger)
+
+			foundTransactions := flappy_trade.IndexBlock(first, somm_to_osmo, osmo_to_eth, MyR.Logger)
+			//if len(foundTransactions) > 0 && MyR.pool.IsCaughtUp() {
+			if len(foundTransactions) > 0 {
+				for _, transaction := range foundTransactions {
+					if flappy_trade.ShouldSell(&transaction, "http://127.0.0.1:5000/predict") {
+						MyR.Logger.Error("SELL SELL SELLL SELLLLLL NOW!!!! -  Transaction", transaction)
+					} else {
+						MyR.Logger.Error("Hoooooooollld. ", transaction)
+					}
+				}
+			}
 
 			blocksSynced++
 
@@ -502,19 +512,6 @@ func main() {
 	for {
 		time.Sleep(5 * time.Second)
 	}
-}
-
-// need to use as raw data as possible, can always do transforms on
-// the data later.
-type Transaction struct {
-	BlockNumber     int64   `json:"block_number" parquet:"name=block_number, type=INT64"`
-	Time            int64   `json:"time" parquet:"name=time, type=INT64"`
-	MessageType     string  `json:"message_type" parquet:"name=message_type, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Source          string  `json:"source" parquet:"name=source, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Destination     string  `json:"destination" parquet:"name=destination, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Amount          int64   `json:"amount" parquet:"name=amount, type=INT64"`
-	OsmoToEthPrice  float32 `json:"osmo_eth_price" parquet:"name=osmo_eth_price, type=FLOAT"`
-	SommToOsmoPrice float32 `json:"somm_osmo_price" parquet:"name=somm_osmo_price, type=FLOAT"`
 }
 
 func indexDbStore(logger tmlog.Logger) {
