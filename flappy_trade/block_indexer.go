@@ -50,7 +50,7 @@ const OSMO_ETH_POOL = 704
 
 var encodingConfig params.EncodingConfig
 var blockstore *store.BlockStore
-var pw *writer.ParquetWriter
+var curPw *writer.ParquetWriter
 var curPwFile string
 var curPrefix string
 var storedb *dbm.GoLevelDB
@@ -159,7 +159,7 @@ func GetPoolPrice(poolId int64, baseAsset string, denomAsset string) float64 {
 
 }
 
-func IndexMsg(logger log.Logger, pw *writer.ParquetWriter, encodingConfig *params.EncodingConfig, msg sdk.Msg, msgIndex int, height int64, blockTime int64, somm_to_osmo float64, osmo_to_eth float64) []Transaction {
+func EncodeMsg(logger log.Logger, encodingConfig *params.EncodingConfig, msg sdk.Msg, msgIndex int, height int64, blockTime int64, somm_to_osmo float64, osmo_to_eth float64) []Transaction {
 	var foundTransactions []Transaction
 	var newTrans = Transaction{}
 	switch m := msg.(type) {
@@ -277,12 +277,8 @@ func IndexMsg(logger log.Logger, pw *writer.ParquetWriter, encodingConfig *param
 				logger.Error("failed to unpack msg", zap.Error(err))
 				panic(err)
 			}
-			newTransactions := IndexMsg(logger, pw, encodingConfig, innerMsg, i, height, blockTime, somm_to_osmo, osmo_to_eth)
+			newTransactions := EncodeMsg(logger, encodingConfig, innerMsg, i, height, blockTime, somm_to_osmo, osmo_to_eth)
 			foundTransactions = append(foundTransactions, newTransactions...)
-			if err := pw.Write(newTrans); err != nil {
-				logger.Error("Failed writing to parquet file:", err)
-				panic(err)
-			}
 		}
 	case *gravitytypes.MsgSendToEthereum:
 		print("gravity.MsgSendToEthereum ", m.Amount.Amount.String(), " from ", m.Sender, " to ", m.EthereumRecipient)
@@ -356,9 +352,7 @@ func IndexMsg(logger log.Logger, pw *writer.ParquetWriter, encodingConfig *param
 	if (newTrans != Transaction{}) {
 		newTrans.SommToOsmoPrice = float32(somm_to_osmo)
 		newTrans.OsmoToEthPrice = float32(osmo_to_eth)
-		if err := pw.Write(newTrans); err != nil {
-			panic(err)
-		}
+
 		foundTransactions = append(foundTransactions, newTrans)
 	}
 	return foundTransactions
@@ -400,9 +394,17 @@ func IndexBlockHeight(height int64, somm_to_osmo float64, osmo_to_eth float64, l
 	*/
 }
 
-func IndexBlock(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64, logger log.Logger) []Transaction {
+func IndexTransactions(transactions []Transaction, block *cometbft.Block, logger log.Logger) {
+	curPw, curPwFile, curPrefix = GetParquetWriter(ParquetFolder, block, logger, curPw, curPwFile, curPrefix)
+	for _, transaction := range transactions {
+		if err := curPw.Write(transaction); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func EncodeBlockTransactions(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64, logger log.Logger) []Transaction {
 	var foundTransactions []Transaction
-	pw, curPwFile, curPrefix = GetParquetWriter(ParquetFolder, block, logger, pw, curPwFile, curPrefix)
 	//blocktime is in UTC time
 	blockTime := block.Time.UTC().Unix()
 	blockTimeString := block.Time.UTC().Format("2006-01-02 15:04:05")
@@ -456,7 +458,7 @@ func IndexBlock(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64
 			fmt.Printf("block %d tx %d: %s\n", block.Height, index, tx)
 			for msgIndex, msg := range sdkTx.GetMsgs() {
 				print(msg)
-				newTransactions := IndexMsg(logger, pw, &encodingConfig, msg, msgIndex, block.Height, blockTime, somm_to_osmo, osmo_to_eth)
+				newTransactions := EncodeMsg(logger, &encodingConfig, msg, msgIndex, block.Height, blockTime, somm_to_osmo, osmo_to_eth)
 				foundTransactions = append(foundTransactions, newTransactions...)
 			}
 		}
@@ -471,10 +473,7 @@ func IndexBlock(block *cometbft.Block, somm_to_osmo float64, osmo_to_eth float64
 			SommToOsmoPrice: float32(somm_to_osmo),
 			OsmoToEthPrice:  float32(osmo_to_eth),
 		}
-		if err := pw.Write(emptyTransaction); err != nil {
-			logger.Error(err.Error())
-			panic(err)
-		}
+
 		foundTransactions = append(foundTransactions, emptyTransaction)
 	}
 	return foundTransactions
@@ -513,12 +512,12 @@ func initParquetReader(fileName string) *reader.ParquetReader {
 	return pr
 }
 
-func initParquetWriter(fileName string) *writer.ParquetWriter {
+func initParquetWriterDeletingExistingData(fileName string) *writer.ParquetWriter {
+	// Create or overwrite the file
 	fw, err := local.NewLocalFileWriter(fileName)
 	if err != nil {
 		panic(err)
 	}
-
 	pw, err := writer.NewParquetWriter(fw, new(Transaction), 2)
 	if err != nil {
 		panic(err)
@@ -528,14 +527,65 @@ func initParquetWriter(fileName string) *writer.ParquetWriter {
 	return pw
 }
 
-func GetParquetWriter(rootDirectory string, block *cometbft.Block, logger log.Logger, curPw *writer.ParquetWriter, curFile string, curPrefix string) (*writer.ParquetWriter, string, string) {
+func initParquetWriterKeepingExistingData(fileName string) *writer.ParquetWriter {
+	var transactions []*Transaction
+	// Check if file exists and has data
+	if fileInfo, err := os.Stat(fileName); err == nil && fileInfo.Size() > 0 {
+		fr, err := local.NewLocalFileReader(fileName)
+		if err != nil {
+			panic(err)
+		}
+		defer fr.Close()
+
+		pr, err := reader.NewParquetReader(fr, new(Transaction), 2)
+		//most likely file is opened but never shut properly.
+		if err != nil {
+			//likely invalid format
+			// Create or overwrite the file
+			fmt.Println("Error reading file, will overwrite", err)
+		} else {
+			defer pr.ReadStop()
+			num := int(pr.GetNumRows())
+			for i := 0; i < num; i++ {
+				transaction := make([]*Transaction, 1)
+				if err = pr.Read(&transaction); err != nil {
+					panic(err)
+				}
+				transactions = append(transactions, transaction...)
+			}
+		}
+	}
+	pw := initParquetWriterDeletingExistingData(fileName)
+	// Write existing data
+	for _, transaction := range transactions {
+		if err := pw.Write(transaction); err != nil {
+			panic(err)
+		}
+	}
+	return pw
+}
+
+func CloseCurrentParquetFile() {
+	CloseParquetFile(curPw)
+}
+
+func CloseParquetFile(pw *writer.ParquetWriter) {
+	if pw != nil {
+		pw.Flush(true)
+		pw.WriteStop()
+		pw.PFile.Close()
+	}
+}
+
+func GetParquetWriter(rootDirectory string, block *cometbft.Block, logger log.Logger, maybePw *writer.ParquetWriter, curFile string, curPrefix string) (*writer.ParquetWriter, string, string) {
 	//ensure it's a UTC time
 	t := time.Unix(block.Time.Unix(), 0).UTC()
+	//t := time.Unix(blockTime.Unix(), 0).UTC()
 	// Format the time to construct the folder and file name
 
 	filePrefix := t.Format("02")
-	if curPrefix == filePrefix && curPw != nil && curFile != "" {
-		return curPw, curFile, curPrefix
+	if curPrefix == filePrefix && maybePw != nil && curFile != "" {
+		return maybePw, curFile, curPrefix
 	}
 	folderPath := filepath.Join(rootDirectory, t.Format("./2006/01/"))
 	// Check if the folder exists
@@ -546,19 +596,20 @@ func GetParquetWriter(rootDirectory string, block *cometbft.Block, logger log.Lo
 			panic(err)
 		}
 	}
+	//check if the file exists
 	fileName := getFileWithPrefix(folderPath, filePrefix)
 	if fileName == "" {
 		fileName = filePrefix + "-" + fmt.Sprint(block.Height) + ".parquet"
+		// Combine folder and file names to get the full path
+		fullPath := filepath.Join(folderPath, fileName)
+		CloseParquetFile(maybePw)
+		pw := initParquetWriterDeletingExistingData(fullPath)
+		return pw, fullPath, filePrefix
+	} else {
+		fullPath := filepath.Join(folderPath, fileName)
+		CloseParquetFile(maybePw)
+		pw := initParquetWriterDeletingExistingData(fullPath)
+		return pw, fullPath, filePrefix
 	}
-	// Combine folder and file names to get the full path
-	fullPath := filepath.Join(folderPath, fileName)
-	if curPw != nil {
-		curPw.Flush(true)
-		curPw.WriteStop()
-		curPw.PFile.Close()
-	}
-
-	pw := initParquetWriter(fullPath)
-	return pw, fullPath, filePrefix
 
 }

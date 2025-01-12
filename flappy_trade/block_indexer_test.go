@@ -35,7 +35,7 @@ func TestMarshalJson(t *testing.T) {
 
 func TestParquetWriter(t *testing.T) {
 	filename := "/Users/richard/workspace/training-data/test.parquet"
-	pw := initParquetWriter(filename)
+	pw := initParquetWriterKeepingExistingData(filename)
 	data := []Transaction{
 		{BlockNumber: 1,
 			Time:            2,
